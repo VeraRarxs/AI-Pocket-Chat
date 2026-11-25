@@ -8,60 +8,55 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
 
     steps:
-      - name: 拉取源码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: 安装 JDK 21
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
 
-      - name: 安装 Android SDK
+      - name: 准备 Android SDK
         run: |
-          set -e
-          SDK="$RUNNER_TEMP/android-sdk"
-          mkdir -p "$SDK/cmdline-tools"
-          curl -fsSL -o /tmp/cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q /tmp/cmdline-tools.zip -d "$SDK/cmdline-tools"
-          mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
-          rm -f local.properties
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          if [ -d "$SDK/cmdline-tools" ]; then
+            BIN=$(ls -d "$SDK"/cmdline-tools/*/bin 2>/dev/null | head -1)
+          else
+            SDK="$RUNNER_TEMP/android-sdk"
+            mkdir -p "$SDK/cmdline-tools"
+            curl -fsSL -o /tmp/cmd.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+            unzip -q /tmp/cmd.zip -d "$SDK/cmdline-tools"
+            mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
+            BIN="$SDK/cmdline-tools/latest/bin"
+          fi
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
-          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
-          export PATH="$SDK/cmdline-tools/latest/bin:$PATH"
-          sdkmanager --version | tee /tmp/setup.log
-
-      - name: 接受许可并安装 SDK 37
-        run: |
-          set -o pipefail
-          yes | sdkmanager --channel=3 --licenses > /dev/null 2>&1 || true
-          sdkmanager --list --channel=3 2>&1 | grep -E "platforms;android-3[67]|build-tools;37" | head -6 | tee -a /tmp/setup.log || true
-          (sdkmanager "platforms;android-37" \
-            || sdkmanager --channel=3 "platforms;android-37") 2>&1 | tee -a /tmp/setup.log
-          sdkmanager --channel=3 "build-tools;37.0.0" 2>&1 | tee -a /tmp/setup.log || true
-          sdkmanager --list_installed | head -30
+          echo "$BIN" >> "$GITHUB_PATH"
+          echo "SDK=$SDK  BIN=$BIN"
+          yes | "$BIN/sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$BIN/sdkmanager" "platforms;android-37.0" > /dev/null 2>&1 || true
+          "$BIN/sdkmanager" "platforms;android-37" > /dev/null 2>&1 || true
+          echo "--- platforms 目录"; ls "$SDK/platforms" || true
+          rm -f local.properties
 
       - name: 编译 debug APK
         run: |
           chmod +x gradlew
-          set -o pipefail
-          ./gradlew :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee /tmp/build.log
+          set +e
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace > /tmp/build.log 2>&1
+          RC=$?
+          echo "gradle exit=$RC"
+          if [ $RC -ne 0 ]; then
+            MSG=$(tr '\r' '\n' < /tmp/build.log | grep -vE '^[[:space:]]*$' | tail -14 | tr '\n' '|' | head -c 1000)
+            echo "::error::$MSG"
+            exit 1
+          fi
 
-      - name: 失败时输出日志尾部（给我远程看）
-        if: failure()
-        run: |
-          F=/tmp/build.log; [ -s "$F" ] || F=/tmp/setup.log
-          echo "::error::$(tail -c 700 "$F" 2>/dev/null | tr '\n' '|')"
-
-      - name: 上传 APK
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: AI-Pocket-Chat-debug-apk
