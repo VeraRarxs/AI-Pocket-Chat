@@ -36,14 +36,16 @@ jobs:
           echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "$SDK/platform-tools" >> "$GITHUB_PATH"
           export PATH="$SDK/cmdline-tools/latest/bin:$PATH"
-          sdkmanager --version
+          sdkmanager --version | tee /tmp/setup.log
 
       - name: 接受许可并安装 SDK 37
         run: |
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "platform-tools"
-          sdkmanager "platforms;android-37"
-          sdkmanager "build-tools;37.0.0" || true
+          set -o pipefail
+          yes | sdkmanager --channel=3 --licenses > /dev/null 2>&1 || true
+          sdkmanager --list --channel=3 2>&1 | grep -E "platforms;android-3[67]|build-tools;37" | head -6 | tee -a /tmp/setup.log || true
+          (sdkmanager "platforms;android-37" \
+            || sdkmanager --channel=3 "platforms;android-37") 2>&1 | tee -a /tmp/setup.log
+          sdkmanager --channel=3 "build-tools;37.0.0" 2>&1 | tee -a /tmp/setup.log || true
           sdkmanager --list_installed | head -30
 
       - name: 编译 debug APK
@@ -55,7 +57,8 @@ jobs:
       - name: 失败时输出日志尾部（给我远程看）
         if: failure()
         run: |
-          echo "::error::$(tail -c 700 /tmp/build.log 2>/dev/null | tr '\n' '|')"
+          F=/tmp/build.log; [ -s "$F" ] || F=/tmp/setup.log
+          echo "::error::$(tail -c 700 "$F" 2>/dev/null | tr '\n' '|')"
 
       - name: 上传 APK
         uses: actions/upload-artifact@v4
