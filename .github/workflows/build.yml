@@ -30,27 +30,36 @@ jobs:
           curl -fsSL -o /tmp/cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
           unzip -q /tmp/cmdline-tools.zip -d "$SDK/cmdline-tools"
           mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
+          rm -f local.properties
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "$SDK/platform-tools" >> "$GITHUB_PATH"
-          rm -f local.properties
+          export PATH="$SDK/cmdline-tools/latest/bin:$PATH"
           sdkmanager --version
 
       - name: 接受许可并安装 SDK 37
         run: |
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "platform-tools" "platforms;android-37" || true
+          sdkmanager "platform-tools"
+          sdkmanager "platforms;android-37"
           sdkmanager "build-tools;37.0.0" || true
           sdkmanager --list_installed | head -30
 
       - name: 编译 debug APK
         run: |
           chmod +x gradlew
-          ./gradlew :app:assembleDebug --no-daemon --stacktrace
+          set -o pipefail
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee /tmp/build.log
+
+      - name: 失败时输出日志尾部（给我远程看）
+        if: failure()
+        run: |
+          echo "::error::$(tail -c 700 /tmp/build.log 2>/dev/null | tr '\n' '|')"
 
       - name: 上传 APK
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: AI-Pocket-Chat-debug-apk
           path: app/build/outputs/apk/debug/*.apk
